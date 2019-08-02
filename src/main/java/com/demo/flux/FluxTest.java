@@ -1,8 +1,8 @@
 package com.demo.flux;
 
 import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
-import org.reactivestreams.Publisher;
 import reactor.core.publisher.*;
 import reactor.core.scheduler.Schedulers;
 import reactor.util.function.Tuple2;
@@ -11,17 +11,32 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.BiConsumer;
-import java.util.function.Consumer;
-import java.util.function.Function;
+import java.util.function.*;
 import java.util.stream.Stream;
 
 /**
  * @Author ZhengYingjie
  * @Date 2019-07-31
  * @Description
+ *
+ *
+ * 这几个方法调用，均返回包涵一个Boolean信号的Mono。
+ *
+ * all(Predicate<? super T> predicate)表示所有值均满足条件
+ * any(Predicate<? super T> predicate)表示存在一个值满足条件
+ * hasElement(T t)表示是否存在该值
+ * hasElements()表示是否拥有一个或多个元素
+ *
+ * compose与as的区别是转化类型做了限制，必须继承Publisher，同时compose是惰性的。 都是转换用的类似map
+ *
  */
 public class FluxTest {
+
+
+    @Before
+    public void before(){
+        Hooks.onOperatorDebug();
+    }
 
 
     /**
@@ -103,6 +118,46 @@ public class FluxTest {
 
     }
 
+    @Test
+    public void testConcatMap(){
+        Flux<List<Integer>> just = Flux.just(Arrays.asList(1, 2, 3), Arrays.asList(7, 8, 9), Arrays.asList(3, 4, 5));
+        Flux<Object> objectFlux = just.concatMap(Flux::fromIterable);
+        // [1, 2, 3]
+        // [7, 8, 9]
+        // [3, 4, 5]
+        foreachFlux(just);
+        // 1
+        // 2
+        // 3
+        // 7
+        // 8
+        // 9
+        // 3
+        // 4
+        // 5
+        foreachFlux(objectFlux);
+
+    }
+
+    //与concatMap效果一样
+    @Test
+    public void testFlatMap(){
+        Flux<List<Integer>> just = Flux.just(Arrays.asList(1, 2, 3), Arrays.asList(7, 8, 9), Arrays.asList(3, 4, 5));
+        Flux<Object> objectFlux = just.flatMap(Flux::fromIterable);
+        foreachFlux(objectFlux);
+    }
+
+    @Test
+    public void testCollect(){
+    }
+
+    @Test
+    public void testConcatWith(){
+        Flux<List<Integer>> just = Flux.just(Arrays.asList(1, 2, 3), Arrays.asList(7, 8, 9), Arrays.asList(3, 4, 5));
+        Flux<List<Integer>> listFlux = just.concatWith(just);
+        foreachFlux(listFlux);
+    }
+
     // handle() 方法可以类比为 Stream 的 map() + filter()
     @Test
     public void testHandle() {
@@ -124,8 +179,13 @@ public class FluxTest {
     @Test
     public void testBuffer() {
         // 每隔一秒产生一条数据
-        Flux<Long> flux = Flux.interval(Duration.of(1, ChronoUnit.SECONDS));
-        // Flux<Long> flux = Flux.just(0L,1L,2L,3L,4L,5L,6L,7L,8L,9L,10L);
+        // Flux<Long> flux = Flux.interval(Duration.of(1, ChronoUnit.SECONDS));
+
+        Flux<Long> flux = Flux.just(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L);
+        //无参将所有的数据封装为list返回 其实是调用buffer(Integer.MAX_VALUE)方法
+        Flux<List<Long>> buffer1 = flux.buffer();
+        foreachFlux(buffer1);
+
         // 调用 buffer 进行缓存，每隔2个开启缓存，每个缓存最大3个数据，并且只取前面3个缓存块
         Flux<List<Long>> buffer = flux.buffer(3, 2).take(3);
 
@@ -266,11 +326,86 @@ public class FluxTest {
 
     }
 
+    //统计Flux中有几个数据 并返回一个Mono
+    @Test
+    public void testCount() {
+        Flux<Integer> range = Flux.just(2, 2);
+
+        Mono<Long> count = range.count();
+        count.subscribe(System.out::println);
+    }
+
+    @Test
+    public void testReduce() {
+        //左闭右包 0-9
+        Flux<Integer> range = Flux.range(0, 10);
+        //求和
+        Mono<Integer> reduce1 = range.reduce(Integer::sum);
+
+        // 第一个参数为初始值
+        Mono<ArrayList<Integer>> reduce2 = range.reduce(new ArrayList<>(), (integers, integer) -> {
+            integers.add(integer);
+            return integers;
+        });
+
+        reduce2.subscribe(System.out::println);
+    }
+
+
+    @Test
+    public void testRepeat(){
+        Flux<Integer> range = Flux.range(0, 10);
+        Flux<Integer> repeat = range.repeat(); //无限复制原有的Flux 并放到新的Flux中 无界数据流
+
+        Flux<Integer> repeat1 = range.repeat(2); //复制两次
+        foreachFlux(repeat);
+    }
+
+
+
+    /**
+     * 发布者都是一个 publish方法只会发布一次
+     * 后面的订阅者只能从开始订阅的时间节点开始消费后边的数据
+     * 订阅之前已经发布的数据将不会被后来的订阅者消费
+     * 与replay方法的不同点在于 replay方法中后来的订阅者将从头开始重新将所有之前的数据消费一遍
+     * @throws InterruptedException
+     */
+    @Test
+    public void testPublish() throws InterruptedException {
+        Flux fl = Flux.range(0,10000)
+                .delayElements(Duration.ofSeconds(1))
+                .publish(1) //prefetch 预取 不知道有啥用 0的时候
+                .autoConnect();
+        foreachFlux(fl);
+        Thread.sleep(4000);
+        foreachFlux(fl);
+        Thread.sleep(4000L);
+        foreachFlux(fl);
+
+    }
+
+    /**
+     * 说明见testPublish()
+     * @throws InterruptedException
+     */
+    @Test
+    public void testReplay() throws InterruptedException {
+        Flux<Integer> range = Flux.range(0, 10);
+        Flux<Integer> flux1 = range.delayElements(Duration.ofSeconds(1))
+                .replay()
+                .autoConnect();
+        foreachFlux(flux1);
+        Thread.sleep(4000);
+        foreachFlux(flux1);
+    }
+
 
     /**
      * 之前说讲的 Flux、Mono 都只是异步数据序列，在没有订阅前，不会发生任何事情。不过在发布者中有两种数据类型，冷数据和热数据。
      * 上面说的都是指冷数据，他会为每个订阅者重新生成数据，如果没有订阅被创建，那么数据永远不会被生成。
-     * 而热数据并不会依赖订阅者，它会在开始的时候就直接发布数据，当每一个新的订阅者过来，只能收到新的数据。
+     * 而热数据并不会依赖订阅者，它会在开始的时候就直接发布数据，
+     * 当每一个新的订阅者过来，根据使用的订阅策略不同 将产生不同的效果 见testPublish() 和 testReplay()方法
+     *
      */
     @Test
     public void testHotData() throws InterruptedException {
@@ -278,7 +413,8 @@ public class FluxTest {
         final UnicastProcessor<Integer> hotSource = UnicastProcessor.create();
 
         //定义数据处理逻辑
-        Flux<Integer> flux = hotSource.publish()
+        Flux<Integer> flux = hotSource.replay() //使用replay方法 每个订阅者都将从头开始消费到完整的数据
+        // Flux<Integer> flux = hotSource.publish() //使用publish方法 每个订阅者都将消费最新发布的和之后的数据
                 .autoConnect()  //自动连接到注册进来的subscriber
                 .map(x -> x * 10);
 
@@ -341,9 +477,9 @@ public class FluxTest {
         // Subscription is completed!
         foreachFlux(composedFlux); //2
         Thread.sleep(1000);
-        // BLUE
-        // GREEN
-        // ORANGE
+        // blue
+        // green
+        // purple
         // Subscription is completed!
         foreachFlux(composedFlux); //3
     }
@@ -373,6 +509,7 @@ public class FluxTest {
 
         foreachFlux(composedFlux); //2
         Thread.sleep(1000);
+
         foreachFlux(composedFlux); //3
 
     }
@@ -407,7 +544,7 @@ public class FluxTest {
      * 来将订阅者进行分轨，再通过runOn来指定调度任务以提供足够的线程，
      * 在下面的例子中就将分成了4个线程来并行处理。
      * 注意如果没调用 runOn 就会使用当前线程，频繁的切换来处理订阅信息。
-     * 与PublishOn And SubscribeOn 不同的是就算只有每个消费者都会采用多线程处理
+     * 与PublishOn And SubscribeOn 不同的是就算只有1个消费者都会采用多线程处理 即每个消费者都是多线程处理的
      */
     @Test
     public void testRunOn() {
@@ -423,35 +560,17 @@ public class FluxTest {
     }
 
 
-    //没搞明白
+    //将数据按条件分组 相同分组的会被组装成GroupedFlux<Key,Value>
     @Test
     public void testGroupBy() {
         Flux<Integer> just = Flux.just(1, 2, 3, 4, 5);
 
         //按照groupBy方法传入的函数的返回值进行分组
         Flux<GroupedFlux<Boolean, Integer>> groupedFluxFlux = just.groupBy(integer -> integer % 2 == 0);
-        // Flux<Object> map = groupedFluxFlux.map(flux -> {
-        //
-        //     HashMap<Boolean, List<Integer>> map1 = new HashMap<>();
-        //     ArrayList<Integer> integers = new ArrayList<>();
-        //     flux.subscribe(integers::add);
-        //
-        //     map1.put(flux.key(), integers);
-        //     return map1;
-        // });
-        //
-        // map.subscribe(x -> {
-        //     Map<Boolean, Iterable<Integer>> x1 = (Map<Boolean, Iterable<Integer>>) x;
-        //         x1.forEach((aBoolean, iterable) -> {
-        //             final StringBuffer str = new StringBuffer();
-        //             str.append("[");
-        //             iterable.forEach(str::append);
-        //             str.append("]");
-        //             System.out.println(aBoolean+"--->"+str.toString());
-        //         });
-        // });
+        Flux<Flux<List<Integer>>> map = groupedFluxFlux.map(Flux::buffer);
 
-        foreachFlux(groupedFluxFlux);
+
+        foreachFlux(map);
 
     }
 
