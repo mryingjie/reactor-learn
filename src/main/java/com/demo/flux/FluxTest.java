@@ -184,6 +184,7 @@ public class FluxTest {
         Flux<Long> flux = Flux.just(0L, 1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L);
         //无参将所有的数据封装为list返回 其实是调用buffer(Integer.MAX_VALUE)方法
         Flux<List<Long>> buffer1 = flux.buffer();
+
         foreachFlux(buffer1);
 
         // 调用 buffer 进行缓存，每隔2个开启缓存，每个缓存最大3个数据，并且只取前面3个缓存块
@@ -581,8 +582,10 @@ public class FluxTest {
                 v -> {
                     if (v instanceof Flux) {
                         foreachFlux((Flux<Object>) v);
+
                         return;
                     }
+
                     System.out.println(v);
                 }, //数据处理 本质是onNext() 方法
                 Throwable::printStackTrace,  //异常处理 onError() 方法
